@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/boltdb/bolt"
 	"github.com/chyroc/go-aliyundrive"
@@ -69,14 +71,18 @@ func (aliyun *Aliyun) Get(key string, off, limit int64) (io.ReadCloser, error) {
 
 func (aliyun *Aliyun) Put(key string, r io.Reader) error {
 	log.Println("put", key)
-	tmpFile, err := os.CreateTemp(os.TempDir(), "")
+	aliyunKey := strings.ReplaceAll(key, "/", "_")
+	tmpDir, err := os.MkdirTemp(os.TempDir(), "")
 	if err != nil {
 		return err
 	}
-	defer func() {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
-	}()
+	defer os.RemoveAll(tmpDir)
+
+	tmpFile, err := os.Create(filepath.Join(tmpDir, aliyunKey))
+	if err != nil {
+		return err
+	}
+	defer tmpFile.Close()
 	_, err = io.Copy(tmpFile, r)
 	if err != nil {
 		return err
@@ -93,10 +99,23 @@ func (aliyun *Aliyun) Put(key string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	log.Println(aliyun)
+
+	var fileID string
+	aliyun.db.View(func(t *bolt.Tx) error {
+		b := t.Bucket(fileDefaultBoltBucket)
+		fileID = string(b.Get([]byte(key)))
+		return nil
+	})
+	if len(fileID) > 0 {
+		aliyun.Delete(key)
+	}
 	return aliyun.db.Update(func(t *bolt.Tx) error {
 		b := t.Bucket(fileDefaultBoltBucket)
 		log.Println("upload file", aliyun.driveID, tmpFile.Name(), key, resp)
+		fileID := b.Get([]byte(key))
+		if len(fileID) > 0 {
+			aliyun.Delete(key)
+		}
 		return b.Put([]byte(key), []byte(resp.FileID))
 	})
 }
@@ -162,6 +181,19 @@ func NewAliyun(u, user, passwd string) (*Aliyun, error) {
 	if err != nil {
 		return nil, fmt.Errorf("login aliyun: %w", err)
 	}
+	go func() {
+		for {
+			time.Sleep(time.Minute)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			log.Println("refresh token")
+			_, err := sdk.Auth.LoginByQrcode(ctx)
+			cancel()
+			if err != nil {
+				log.Println("login error: %w", err)
+				os.Exit(1)
+			}
+		}
+	}()
 	log.Println(uinfo.DefaultDriveID)
 	resp, err := sdk.File.CreateFolder(context.Background(), &aliyundrive.CreateFolderReq{
 		DriveID:      uinfo.DefaultDriveID,
