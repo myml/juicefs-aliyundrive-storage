@@ -112,10 +112,6 @@ func (aliyun *Aliyun) Put(key string, r io.Reader) error {
 	return aliyun.db.Update(func(t *bolt.Tx) error {
 		b := t.Bucket(fileDefaultBoltBucket)
 		log.Println("upload file", aliyun.driveID, tmpFile.Name(), key, resp)
-		fileID := b.Get([]byte(key))
-		if len(fileID) > 0 {
-			aliyun.Delete(key)
-		}
 		return b.Put([]byte(key), []byte(resp.FileID))
 	})
 }
