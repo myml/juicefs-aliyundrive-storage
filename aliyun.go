@@ -71,6 +71,20 @@ func (aliyun *Aliyun) Get(key string, off, limit int64) (io.ReadCloser, error) {
 
 func (aliyun *Aliyun) Put(key string, r io.Reader) error {
 	log.Println("put", key)
+
+	var fileID string
+	aliyun.db.View(func(t *bolt.Tx) error {
+		b := t.Bucket(fileDefaultBoltBucket)
+		fileID = string(b.Get([]byte(key)))
+		return nil
+	})
+	if len(fileID) > 0 {
+		err := aliyun.Delete(key)
+		if err != nil {
+			return err
+		}
+	}
+
 	aliyunKey := strings.ReplaceAll(key, "/", "_")
 	tmpDir, err := os.MkdirTemp(os.TempDir(), "")
 	if err != nil {
@@ -99,15 +113,8 @@ func (aliyun *Aliyun) Put(key string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
-
-	var fileID string
-	aliyun.db.View(func(t *bolt.Tx) error {
-		b := t.Bucket(fileDefaultBoltBucket)
-		fileID = string(b.Get([]byte(key)))
-		return nil
-	})
-	if len(fileID) > 0 {
-		aliyun.Delete(key)
+	if len(resp.FileID) == 0 {
+		return fmt.Errorf("upload fail: %v", resp)
 	}
 	return aliyun.db.Update(func(t *bolt.Tx) error {
 		b := t.Bucket(fileDefaultBoltBucket)
@@ -163,11 +170,7 @@ func NewAliyun(u, user, passwd string) (*Aliyun, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create bucket: %w", err)
 	}
-	store, err := NewConfigStore(db)
-	if err != nil {
-		return nil, fmt.Errorf("create config store: %w", err)
-	}
-	opt := []aliyundrive.ClientOptionFunc{aliyundrive.WithStore(store)}
+	opt := []aliyundrive.ClientOptionFunc{}
 	if len(worker) > 0 {
 		opt = append(opt, aliyundrive.WithWorkDir(worker))
 	}
